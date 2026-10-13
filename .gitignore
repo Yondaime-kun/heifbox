@@ -1,0 +1,9 @@
+# The built binary shares the module's name, so it is anchored: an unanchored
+# "heifbox" would also ignore the cmd/heifbox/ source directory.
+/heifbox
+
+# Editors and OS noise.
+*~
+.DS_Store
+.idea/
+.vscode/

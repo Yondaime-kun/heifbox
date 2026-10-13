@@ -1,0 +1,109 @@
+# PLAN — heifbox
+
+A reader for the HEIF family of container formats — HEIC, AVIF, and the others
+built on the same ISO base media file format — written in Go with no
+dependencies, covering the structural metadata and the derived image items.
+
+## The target and the gap, stated before anything is built
+
+The gap was measured, not assumed. A GitHub search for a HEIF or AVIF container
+parser in Go returns nothing:
+
+```
+"heif box"    language:Go   -> no results
+"avif parse"  language:Go   -> no results
+"bmff"        language:Go   -> itsjamie/bmff, 10 stars, unmaintained
+"isobmff"     language:Go   -> Eyevinn/mp4ff, 660 stars, but that is MP4, not HEIF
+```
+
+What exists for AVIF in Go is a cgo binding to a C codec, not a reader of the
+format: `Kagami/go-avif` (342 stars) carries `// #cgo LDFLAGS: -laom` and
+`import "C"` at the top of its main file, and `jdeng/goheif` (233 stars) binds
+libheif the same way. Neither can read a HEIF file's structure without a C
+toolchain and a codec library present.
+
+The container itself is a documented box tree, and every piece of metadata a
+caller usually wants — the image dimensions, the colour profile, the bit depth,
+the codec configuration, the item list, the thumbnail, the EXIF payload — lives in
+that tree rather than in the compressed image data. That is the part this project
+reads.
+
+## What it will read
+
+- **The box tree.** The ISO base media file format nesting that every HEIF file
+  is made of, walked to a bounded depth with sizes validated at every step.
+- **`ftyp`.** The major brand and compatible brands, which is how a file says
+  whether it is HEIC, AVIF, or something else.
+- **`meta`** and its children: `hdlr`, `pitm` (primary item), `iinf` (item
+  information), `iloc` (item locations), `iprp` (`ipco` properties and `ipma`
+  associations), `iref` (item references), `idat`.
+- **Item properties.** `ispe` (dimensions), `pixi` (channel bit depths), `colr`
+  (colour information, both nclx and ICC), `av1C` (AV1 codec configuration),
+  `hvcC` (HEVC codec configuration), `irot`, `imir`, `clap`, `pasp`, `auxC`.
+- **Derived and auxiliary items.** `grid` items, which compose several coded
+  images into one picture, and `thmb`/`auxl` references, so the thumbnail and
+  auxiliary images can be identified for what they are.
+- **Embedded payloads.** The EXIF and XMP items, returned as their stored bytes.
+
+## What it will not do, decided now rather than discovered later
+
+**No AV1 decoding, and no HEVC decoding.** Compressed image data is located and
+its dimensions and format are read from the structural metadata, but the pixels
+are not decompressed. Writing an AV1 or HEVC decoder is a project of a different
+order — it is a codec, not a container — and claiming it in passing would be the
+dishonest version of this project. The payload is returned as bytes and its
+declared geometry is reported; that is all.
+
+**No writing.** This reads. A writer needs every box the format can contain to be
+correctly emitted, and the reader is the part with a verifiable answer.
+
+**No claim about brands this machine cannot test.** A brand with no fixture and
+no second implementation to compare against stays out of the supported list,
+reported as an unknown brand rather than guessed at.
+
+## Failure conditions, written before the code
+
+Each of these is a way this project could fail while looking finished. Each is
+checked at the end, and any that triggers is fixed rather than documented.
+
+1. **A field is read from a specification description and never checked against
+   a file another implementation wrote.** The whole point is verification. If a
+   box layout is implemented without a fixture to test it on, that is a failure
+   of method, and the box comes out of the supported list.
+
+2. **The dimensions or bit depth reported by this reader disagree with another
+   implementation on any fixture.** ImageMagick reads HEIC, HEIF, and AVIF and
+   reports geometry, colour space and depth. If `ispe` or `pixi` disagree with
+   `identify` on a single file, the parse is wrong.
+
+3. **A malformed file causes a panic, an unbounded loop, or an allocation driven
+   by a number taken from the file.** Box sizes and counts are attacker-controlled
+   in any format a user could be handed. Every one is checked against the bytes
+   actually present before use.
+
+4. **The reader reports success on a file that is not a HEIF file.** A file with
+   a valid `ftyp` but no `meta` box, or a truncated one, must be rejected as such
+   rather than producing a half-filled structure.
+
+5. **A box that was claimed as supported has no fixture exercising it.** The
+   support list in the README and the fixtures in `testdata/` must correspond
+   exactly. A box in one and not the other is a claim that has not been tested.
+
+## Deliverable
+
+A Go module with the reader, a command-line tool that prints a file's structure
+and metadata, a test suite whose expectations come from ImageMagick and from the
+files' own bytes, fixtures generated by ImageMagick and by `ffmpeg` where it can
+write the format, and documentation recording what was measured and what was not.
+
+## Verification plan
+
+The independent implementation is **ImageMagick 1.17.6**, which reads AVIF, HEIC
+and HEIF and was used throughout this project's research to confirm that the
+files being parsed are real and that their declared geometry is correct.
+
+Where ImageMagick cannot write a format, the fixture is produced by another
+route and the restriction is stated. HEIC is read-only in ImageMagick —
+`no encode delegate for this image format 'HEIC'` — so HEIC coverage is limited
+to files that can be obtained or constructed, and that limit is reported rather
+than worked around.
